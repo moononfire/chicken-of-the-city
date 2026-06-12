@@ -1,4 +1,6 @@
-import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/db';
+import { orders, orderItems } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
@@ -11,20 +13,18 @@ function fmt(amount: number) {
 export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
-  const [orderRes, itemsRes] = await Promise.all([
-    supabase.from('orders').select('*').eq('id', id).single(),
-    supabase.from('order_items').select('*').eq('order_id', id),
+  const [orderRows, items] = await Promise.all([
+    db.select().from(orders).where(eq(orders.id, id)).limit(1),
+    db.select().from(orderItems).where(eq(orderItems.orderId, id)),
   ]);
 
-  if (!orderRes.data) notFound();
+  if (!orderRows[0]) notFound();
 
-  const order = orderRes.data;
-  const items = itemsRes.data ?? [];
-  const itemsTotal = items.reduce((s, i) => s + i.quantity * Number(i.unit_price), 0);
+  const order = orderRows[0];
+  const itemsTotal = items.reduce((s, i) => s + i.quantity * Number(i.unitPrice), 0);
 
   return (
     <div className="min-h-screen bg-zinc-50">
-      {/* Header */}
       <div className="border-b border-zinc-200 bg-white px-6 py-4">
         <div className="mx-auto flex max-w-4xl items-center gap-4">
           <Link
@@ -37,14 +37,13 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             Wróć do panelu
           </Link>
           <span className="text-zinc-300">/</span>
-          <h1 className="font-black text-zinc-900">Zamówienie #{order.order_number}</h1>
+          <h1 className="font-black text-zinc-900">Zamówienie #{order.orderNumber}</h1>
         </div>
       </div>
 
       <div className="mx-auto max-w-4xl px-6 py-8">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
 
-          {/* Pozycje zamówienia */}
           <div className="lg:col-span-2">
             <div className="rounded-2xl border border-zinc-200 bg-white shadow-sm">
               <div className="border-b border-zinc-200 px-6 py-4">
@@ -62,11 +61,11 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                 <tbody>
                   {items.map((item, i) => (
                     <tr key={item.id} className={`border-b border-zinc-100 ${i % 2 === 0 ? '' : 'bg-zinc-50/50'}`}>
-                      <td className="px-6 py-3 font-medium text-zinc-900">{item.product_name}</td>
+                      <td className="px-6 py-3 font-medium text-zinc-900">{item.productName}</td>
                       <td className="px-6 py-3 text-center text-zinc-600">× {item.quantity}</td>
-                      <td className="px-6 py-3 text-right text-zinc-500">{fmt(Number(item.unit_price))}</td>
+                      <td className="px-6 py-3 text-right text-zinc-500">{fmt(Number(item.unitPrice))}</td>
                       <td className="px-6 py-3 text-right font-semibold text-zinc-900">
-                        {fmt(item.quantity * Number(item.unit_price))}
+                        {fmt(item.quantity * Number(item.unitPrice))}
                       </td>
                     </tr>
                   ))}
@@ -87,7 +86,6 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
               </table>
             </div>
 
-            {/* Uwagi */}
             {order.notes && (
               <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-6 py-4">
                 <h3 className="mb-2 text-sm font-bold text-amber-800">Uwagi do zamówienia</h3>
@@ -96,41 +94,38 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             )}
           </div>
 
-          {/* Sidebar — dane klienta */}
           <div className="flex flex-col gap-6">
-            {/* Klient */}
             <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
               <h2 className="mb-4 font-bold text-zinc-900">Klient</h2>
               <div className="space-y-3 text-sm">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Imię i nazwisko</p>
-                  <p className="mt-0.5 text-zinc-900">{order.customer_name || '—'}</p>
+                  <p className="mt-0.5 text-zinc-900">{order.customerName || '—'}</p>
                 </div>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Email</p>
-                  <a href={`mailto:${order.customer_email}`} className="mt-0.5 block text-orange-500 hover:underline">
-                    {order.customer_email || '—'}
+                  <a href={`mailto:${order.customerEmail}`} className="mt-0.5 block text-orange-500 hover:underline">
+                    {order.customerEmail || '—'}
                   </a>
                 </div>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Adres dostawy</p>
-                  <p className="mt-0.5 whitespace-pre-line text-zinc-900">{order.shipping_address || '—'}</p>
+                  <p className="mt-0.5 whitespace-pre-line text-zinc-900">{order.shippingAddress || '—'}</p>
                 </div>
               </div>
             </div>
 
-            {/* Podsumowanie */}
             <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
               <h2 className="mb-4 font-bold text-zinc-900">Zamówienie</h2>
               <div className="space-y-3 text-sm">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Numer</p>
-                  <p className="mt-0.5 font-mono font-semibold text-zinc-900">#{order.order_number}</p>
+                  <p className="mt-0.5 font-mono font-semibold text-zinc-900">#{order.orderNumber}</p>
                 </div>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Data</p>
                   <p className="mt-0.5 text-zinc-900">
-                    {new Date(order.created_at).toLocaleString('pl-PL', {
+                    {order.createdAt.toLocaleString('pl-PL', {
                       day: '2-digit', month: '2-digit', year: 'numeric',
                       hour: '2-digit', minute: '2-digit',
                     })}
@@ -138,7 +133,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                 </div>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Kwota</p>
-                  <p className="mt-0.5 text-xl font-black text-zinc-900">{fmt(Number(order.amount_total))}</p>
+                  <p className="mt-0.5 text-xl font-black text-zinc-900">{fmt(Number(order.amountTotal))}</p>
                 </div>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Status</p>

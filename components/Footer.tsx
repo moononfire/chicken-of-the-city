@@ -1,4 +1,4 @@
-import type { RestaurantInfo } from '@/lib/datocms';
+import type { RestaurantInfo } from '@/lib/queries';
 
 interface FooterProps {
   info: RestaurantInfo;

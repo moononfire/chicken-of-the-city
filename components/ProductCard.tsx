@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import type { Product } from '@/lib/datocms';
+import type { Product } from '@/lib/queries';
 import { useCart } from '@/context/CartContext';
 
 interface ProductCardProps {

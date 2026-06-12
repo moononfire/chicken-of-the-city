@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { Category, Product } from '@/lib/datocms';
+import type { Category, Product } from '@/lib/queries';
 import ProductCard from '@/components/ProductCard';
 
 interface InteractiveMenuProps {

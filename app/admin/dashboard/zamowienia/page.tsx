@@ -1,4 +1,6 @@
-import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/db';
+import { orders } from '@/lib/db/schema';
+import { eq, and, or, ilike, gte, lte, desc } from 'drizzle-orm';
 import OrdersTable from '../OrdersTable';
 import LogoutButton from '../LogoutButton';
 import DashboardTabs from '../DashboardTabs';
@@ -6,6 +8,7 @@ import { Suspense } from 'react';
 
 export const dynamic = 'force-dynamic';
 
+const DEFAULT_CLIENT_SLUG = process.env.DEFAULT_CLIENT_SLUG ?? 'default';
 const PAGE_SIZE = 20;
 
 async function getOrders(
@@ -18,31 +21,60 @@ async function getOrders(
   dateTo: string,
 ) {
   const offset = (page - 1) * PAGE_SIZE;
-  let q = supabase
-    .from('orders')
-    .select('id, order_number, amount_total, created_at, customer_name, customer_email, shipping_address, status', { count: 'exact' })
-    .order('created_at', { ascending: false })
-    .range(offset, offset + PAGE_SIZE - 1);
+
+  const conditions = [eq(orders.clientSlug, DEFAULT_CLIENT_SLUG)];
+
   if (query) {
-    q = q.or(`order_number.ilike.%${query}%,customer_name.ilike.%${query}%,customer_email.ilike.%${query}%,shipping_address.ilike.%${query}%`);
+    conditions.push(
+      or(
+        ilike(orders.orderNumber, `%${query}%`),
+        ilike(orders.customerName, `%${query}%`),
+        ilike(orders.customerEmail, `%${query}%`),
+        ilike(orders.shippingAddress, `%${query}%`),
+      )!
+    );
   }
-  if (status) {
-    q = q.eq('status', status);
-  }
-  if (amountMin) {
-    q = q.gte('amount_total', parseFloat(amountMin));
-  }
-  if (amountMax) {
-    q = q.lte('amount_total', parseFloat(amountMax));
-  }
-  if (dateFrom) {
-    q = q.gte('created_at', dateFrom);
-  }
-  if (dateTo) {
-    q = q.lte('created_at', `${dateTo}T23:59:59.999Z`);
-  }
-  const { data, count } = await q;
-  return { orders: data ?? [], total: count ?? 0 };
+  if (status) conditions.push(eq(orders.status, status));
+  if (amountMin) conditions.push(gte(orders.amountTotal, amountMin));
+  if (amountMax) conditions.push(lte(orders.amountTotal, amountMax));
+  if (dateFrom) conditions.push(gte(orders.createdAt, new Date(dateFrom)));
+  if (dateTo) conditions.push(lte(orders.createdAt, new Date(`${dateTo}T23:59:59.999Z`)));
+
+  const where = and(...conditions);
+
+  const [rows, countRows] = await Promise.all([
+    db
+      .select({
+        id: orders.id,
+        orderNumber: orders.orderNumber,
+        amountTotal: orders.amountTotal,
+        createdAt: orders.createdAt,
+        customerName: orders.customerName,
+        customerEmail: orders.customerEmail,
+        shippingAddress: orders.shippingAddress,
+        status: orders.status,
+      })
+      .from(orders)
+      .where(where)
+      .orderBy(desc(orders.createdAt))
+      .limit(PAGE_SIZE)
+      .offset(offset),
+    db.$count(orders, where),
+  ]);
+
+  // Normalize to plain objects matching old Supabase shape
+  const normalized = rows.map(r => ({
+    id: r.id,
+    order_number: r.orderNumber,
+    amount_total: parseFloat(r.amountTotal),
+    created_at: r.createdAt.toISOString(),
+    customer_name: r.customerName,
+    customer_email: r.customerEmail,
+    shipping_address: r.shippingAddress,
+    status: r.status,
+  }));
+
+  return { orders: normalized, total: countRows };
 }
 
 export default async function ZamowieniaPage({
@@ -53,7 +85,7 @@ export default async function ZamowieniaPage({
   const { q = '', page: pageStr = '1', status = '', amountMin = '', amountMax = '', dateFrom = '', dateTo = '' } = await searchParams;
   const page = Math.max(1, parseInt(pageStr) || 1);
 
-  const { orders, total } = await getOrders(q, page, status, amountMin, amountMax, dateFrom, dateTo);
+  const { orders: ordersData, total } = await getOrders(q, page, status, amountMin, amountMax, dateFrom, dateTo);
 
   return (
     <div className="min-h-screen bg-zinc-50">
@@ -71,7 +103,7 @@ export default async function ZamowieniaPage({
 
       <div className="mx-auto max-w-7xl px-6 py-8">
         <Suspense>
-          <OrdersTable orders={orders} total={total} page={page} query={q} status={status} amountMin={amountMin} amountMax={amountMax} dateFrom={dateFrom} dateTo={dateTo} />
+          <OrdersTable orders={ordersData} total={total} page={page} query={q} status={status} amountMin={amountMin} amountMax={amountMax} dateFrom={dateFrom} dateTo={dateTo} />
         </Suspense>
       </div>
     </div>

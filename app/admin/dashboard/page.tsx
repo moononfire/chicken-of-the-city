@@ -1,10 +1,14 @@
-import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/db';
+import { orders, orderItems } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
 import Charts from './Charts';
 import LogoutButton from './LogoutButton';
 import CustomerSection from './CustomerSection';
 import DashboardTabs from './DashboardTabs';
 
 export const dynamic = 'force-dynamic';
+
+const DEFAULT_CLIENT_SLUG = process.env.DEFAULT_CLIENT_SLUG ?? 'default';
 
 function getWarsawHour(dateStr: string): number {
   const h = parseInt(
@@ -18,35 +22,41 @@ function getWarsawWeekday(dateStr: string): string {
 }
 
 async function getStats() {
-  const [ordersRes, itemsRes] = await Promise.all([
-    supabase.from('orders').select('amount_total, created_at, customer_email, customer_name'),
-    supabase.from('order_items').select('order_id, product_name, quantity, unit_price'),
+  const [ordersData, itemsData] = await Promise.all([
+    db.select({
+      amountTotal: orders.amountTotal,
+      createdAt: orders.createdAt,
+      customerEmail: orders.customerEmail,
+      customerName: orders.customerName,
+    }).from(orders).where(eq(orders.clientSlug, DEFAULT_CLIENT_SLUG)),
+    db.select({
+      orderId: orderItems.orderId,
+      productName: orderItems.productName,
+      quantity: orderItems.quantity,
+      unitPrice: orderItems.unitPrice,
+    }).from(orderItems).innerJoin(orders, eq(orderItems.orderId, orders.id)).where(eq(orders.clientSlug, DEFAULT_CLIENT_SLUG)),
   ]);
 
-  const orders = ordersRes.data ?? [];
-  const items = itemsRes.data ?? [];
   const today = new Date().toISOString().slice(0, 10);
 
-  // === KPI ===
-  const totalOrders = orders.length;
-  const totalRevenue = orders.reduce((s, o) => s + Number(o.amount_total), 0);
-  const todayOrders = orders.filter(o => o.created_at.slice(0, 10) === today).length;
-  const todayRevenue = orders
-    .filter(o => o.created_at.slice(0, 10) === today)
-    .reduce((s, o) => s + Number(o.amount_total), 0);
+  const totalOrders = ordersData.length;
+  const totalRevenue = ordersData.reduce((s, o) => s + Number(o.amountTotal), 0);
+  const todayOrders = ordersData.filter(o => o.createdAt.toISOString().slice(0, 10) === today).length;
+  const todayRevenue = ordersData
+    .filter(o => o.createdAt.toISOString().slice(0, 10) === today)
+    .reduce((s, o) => s + Number(o.amountTotal), 0);
   const aov = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
-  // === MoM ===
   const thisMonth = new Date().toISOString().slice(0, 7);
   const prevDate = new Date();
   prevDate.setDate(1);
   prevDate.setMonth(prevDate.getMonth() - 1);
   const prevMonth = prevDate.toISOString().slice(0, 7);
 
-  const thisMonthOrders = orders.filter(o => o.created_at.startsWith(thisMonth));
-  const prevMonthOrders = orders.filter(o => o.created_at.startsWith(prevMonth));
-  const thisMonthRevenue = thisMonthOrders.reduce((s, o) => s + Number(o.amount_total), 0);
-  const prevMonthRevenue = prevMonthOrders.reduce((s, o) => s + Number(o.amount_total), 0);
+  const thisMonthOrders = ordersData.filter(o => o.createdAt.toISOString().startsWith(thisMonth));
+  const prevMonthOrders = ordersData.filter(o => o.createdAt.toISOString().startsWith(prevMonth));
+  const thisMonthRevenue = thisMonthOrders.reduce((s, o) => s + Number(o.amountTotal), 0);
+  const prevMonthRevenue = prevMonthOrders.reduce((s, o) => s + Number(o.amountTotal), 0);
   const thisMonthAov = thisMonthOrders.length > 0 ? thisMonthRevenue / thisMonthOrders.length : 0;
   const prevMonthAov = prevMonthOrders.length > 0 ? prevMonthRevenue / prevMonthOrders.length : 0;
 
@@ -58,7 +68,6 @@ async function getStats() {
   const momOrders = momPct(thisMonthOrders.length, prevMonthOrders.length);
   const momAov = momPct(thisMonthAov, prevMonthAov);
 
-  // === Ostatnie 30 dni ===
   const last30 = new Date();
   last30.setDate(last30.getDate() - 29);
   const dailyMap: Record<string, number> = {};
@@ -67,18 +76,17 @@ async function getStats() {
     d.setDate(d.getDate() + i);
     dailyMap[d.toISOString().slice(0, 10)] = 0;
   }
-  orders
-    .filter(o => o.created_at.slice(0, 10) >= last30.toISOString().slice(0, 10))
+  ordersData
+    .filter(o => o.createdAt.toISOString().slice(0, 10) >= last30.toISOString().slice(0, 10))
     .forEach(o => {
-      const day = o.created_at.slice(0, 10);
-      if (day in dailyMap) dailyMap[day] += Number(o.amount_total);
+      const day = o.createdAt.toISOString().slice(0, 10);
+      if (day in dailyMap) dailyMap[day] += Number(o.amountTotal);
     });
   const dailyData = Object.entries(dailyMap).map(([date, revenue]) => ({
     date: date.slice(5),
     przychód: Math.round(revenue * 100) / 100,
   }));
 
-  // === Ostatnie 12 miesięcy ===
   const MONTHS_PL = ['Sty', 'Lut', 'Mar', 'Kwi', 'Maj', 'Cze', 'Lip', 'Sie', 'Wrz', 'Paź', 'Lis', 'Gru'];
   const monthlyMap: Record<string, number> = {};
   for (let i = 11; i >= 0; i--) {
@@ -87,55 +95,51 @@ async function getStats() {
     d.setMonth(d.getMonth() - i);
     monthlyMap[d.toISOString().slice(0, 7)] = 0;
   }
-  orders.forEach(o => {
-    const key = o.created_at.slice(0, 7);
-    if (key in monthlyMap) monthlyMap[key] += Number(o.amount_total);
+  ordersData.forEach(o => {
+    const key = o.createdAt.toISOString().slice(0, 7);
+    if (key in monthlyMap) monthlyMap[key] += Number(o.amountTotal);
   });
   const monthlyData = Object.entries(monthlyMap).map(([key, revenue]) => ({
     date: MONTHS_PL[parseInt(key.split('-')[1]) - 1],
     przychód: Math.round(revenue * 100) / 100,
   }));
 
-  // === Top 10 produktów ===
   const productMap: Record<string, { quantity: number; revenue: number }> = {};
-  items.forEach(item => {
-    if (!productMap[item.product_name]) productMap[item.product_name] = { quantity: 0, revenue: 0 };
-    productMap[item.product_name].quantity += item.quantity;
-    productMap[item.product_name].revenue += item.quantity * Number(item.unit_price);
+  itemsData.forEach(item => {
+    if (!productMap[item.productName]) productMap[item.productName] = { quantity: 0, revenue: 0 };
+    productMap[item.productName].quantity += item.quantity;
+    productMap[item.productName].revenue += item.quantity * Number(item.unitPrice);
   });
   const topProducts = Object.entries(productMap)
     .map(([name, v]) => ({ name, quantity: v.quantity, revenue: Math.round(v.revenue * 100) / 100 }))
     .sort((a, b) => b.quantity - a.quantity)
     .slice(0, 10);
 
-  // === Godziny szczytu ===
   const hoursMap: Record<number, number> = {};
   for (let i = 0; i < 24; i++) hoursMap[i] = 0;
-  orders.forEach(o => {
-    const h = getWarsawHour(o.created_at);
+  ordersData.forEach(o => {
+    const h = getWarsawHour(o.createdAt.toISOString());
     hoursMap[h] = (hoursMap[h] ?? 0) + 1;
   });
   const peakHours = Array.from({ length: 24 }, (_, i) => ({ label: `${i}:00`, count: hoursMap[i] }));
 
-  // === Dzień tygodnia ===
   const DAY_LABELS = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Niedz'];
   const DAY_MAP: Record<string, number> = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
   const daysMap: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
-  orders.forEach(o => {
-    const d = DAY_MAP[getWarsawWeekday(o.created_at)];
+  ordersData.forEach(o => {
+    const d = DAY_MAP[getWarsawWeekday(o.createdAt.toISOString())];
     if (d !== undefined) daysMap[d] += 1;
   });
   const peakDays = DAY_LABELS.map((label, i) => ({ label, count: daysMap[i] }));
 
-  // === Klienci ===
   const customerMap: Record<string, { orders: number; revenue: number; name: string; dates: string[] }> = {};
-  orders.forEach(o => {
-    const email = o.customer_email ?? '';
+  ordersData.forEach(o => {
+    const email = o.customerEmail ?? '';
     if (!email) return;
-    if (!customerMap[email]) customerMap[email] = { orders: 0, revenue: 0, name: o.customer_name ?? '', dates: [] };
+    if (!customerMap[email]) customerMap[email] = { orders: 0, revenue: 0, name: o.customerName ?? '', dates: [] };
     customerMap[email].orders += 1;
-    customerMap[email].revenue += Number(o.amount_total);
-    customerMap[email].dates.push(o.created_at);
+    customerMap[email].revenue += Number(o.amountTotal);
+    customerMap[email].dates.push(o.createdAt.toISOString());
   });
 
   const allCustomers = Object.entries(customerMap);
@@ -165,11 +169,10 @@ async function getStats() {
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 10);
 
-  // === Popularne zestawy ===
   const orderGroupMap: Record<string, Set<string>> = {};
-  items.forEach(item => {
-    if (!orderGroupMap[item.order_id]) orderGroupMap[item.order_id] = new Set();
-    orderGroupMap[item.order_id].add(item.product_name);
+  itemsData.forEach(item => {
+    if (!orderGroupMap[item.orderId]) orderGroupMap[item.orderId] = new Set();
+    orderGroupMap[item.orderId].add(item.productName);
   });
   const pairMap: Record<string, number> = {};
   Object.values(orderGroupMap).forEach(productSet => {
@@ -216,7 +219,6 @@ function KpiCard({ label, value, trend }: { label: string; value: string; trend?
 
 export default async function DashboardPage() {
   const stats = await getStats();
-
   const { kpi, dailyData, monthlyData, topProducts, peakHours, peakDays, customerStats, topCustomers, popularBundles } = stats;
 
   return (
@@ -234,7 +236,6 @@ export default async function DashboardPage() {
       <DashboardTabs />
 
       <div className="mx-auto max-w-7xl px-6 py-8">
-        {/* KPI */}
         <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-5">
           <KpiCard label="Łączne zamówienia" value={kpi.totalOrders.toString()} trend={kpi.momOrders} />
           <KpiCard label="Łączny przychód" value={fmt(kpi.totalRevenue)} trend={kpi.momRevenue} />
@@ -243,7 +244,6 @@ export default async function DashboardPage() {
           <KpiCard label="Śr. wartość zamówienia" value={fmt(kpi.aov)} trend={kpi.momAov} />
         </div>
 
-        {/* Charts: przychód, produkty, godziny, dni */}
         <Charts
           dailyData={dailyData}
           monthlyData={monthlyData}
@@ -252,10 +252,8 @@ export default async function DashboardPage() {
           peakDays={peakDays}
         />
 
-        {/* Sekcja klientów */}
         <CustomerSection customerStats={customerStats} topCustomers={topCustomers} />
 
-        {/* Popularne zestawy */}
         {popularBundles.length > 0 && (
           <div className="mb-8 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
             <h2 className="mb-4 font-bold text-zinc-900">Popularne zestawy</h2>
@@ -269,7 +267,6 @@ export default async function DashboardPage() {
             </div>
           </div>
         )}
-
       </div>
     </div>
   );

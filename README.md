@@ -2,6 +2,18 @@
 
 Aplikacja e-commerce dla restauracji oparta na architekturze **Serverless Headless**. Umożliwia przeglądanie menu, składanie zamówień i płatność online.
 
+## Konta serwisów — kto jest właścicielem
+
+| Serwis | Właściciel konta | Jak to działa |
+|--------|-----------------|---------------|
+| **GitHub** | **Ty (developer)** | Twoje repo, ty kontrolujesz kod |
+| **DatoCMS** | **Klient** | Klient zakłada konto → ty dostajesz dostęp jako collaborator/admin |
+| **Stripe** | **Klient** | Klient zakłada konto → ty dostajesz dostęp jako member. Pieniądze muszą wpływać na firmę klienta, nie twoją |
+| **Supabase** | **Klient** | Klient zakłada konto → ty dostajesz dostęp jako admin. Możliwy też transfer projektu po fakcie |
+| **Vercel** | **Klient** | Klient zakłada konto → ty dostajesz dostęp jako member. Klient sam płaci rachunek |
+
+> Zasada: jeśli skończy się współpraca, klient ma pełną kontrolę nad swoimi danymi i płatnościami bez żadnej migracji. Ty zostajesz po prostu usunięty z projektu.
+
 ## Tech Stack
 
 - **Next.js** (App Router) — frontend i API routes

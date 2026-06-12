@@ -1,6 +1,11 @@
 import { NextRequest } from 'next/server';
 import Stripe from 'stripe';
-import { getAllProducts, getRestaurantInfo } from '@/lib/datocms';
+import { getAllProducts, getRestaurantInfo } from '@/lib/queries';
+import { db } from '@/lib/db';
+import { settings } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
+
+const DEFAULT_CLIENT_SLUG = process.env.DEFAULT_CLIENT_SLUG ?? 'default';
 
 interface CartItemInput {
   id: string;
@@ -9,8 +14,17 @@ interface CartItemInput {
 }
 
 export async function POST(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-  // --- Parse body ---
+  // Per-tenant Stripe key (falls back to env for dev)
+  const tenantSettings = await db
+    .select()
+    .from(settings)
+    .where(eq(settings.clientSlug, DEFAULT_CLIENT_SLUG))
+    .limit(1)
+    .then(r => r[0] ?? null);
+
+  const stripeSecretKey = tenantSettings?.stripeSecretKey ?? process.env.STRIPE_SECRET_KEY!;
+  const stripe = new Stripe(stripeSecretKey);
+
   let items: CartItemInput[];
   try {
     const body = await request.json();
@@ -22,7 +36,6 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Nieprawidłowe dane.' }, { status: 400 });
   }
 
-  // --- Validate structure ---
   for (const item of items) {
     if (
       typeof item.id !== 'string' ||
@@ -36,32 +49,29 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // --- Verify prices against DatoCMS (source of truth) ---
   let products;
   let restaurantInfo;
   try {
-    [products, restaurantInfo] = await Promise.all([getAllProducts(), getRestaurantInfo()]);
+    [products, restaurantInfo] = await Promise.all([
+      getAllProducts(DEFAULT_CLIENT_SLUG),
+      getRestaurantInfo(DEFAULT_CLIENT_SLUG),
+    ]);
   } catch {
     return Response.json({ error: 'Błąd pobierania menu.' }, { status: 502 });
   }
 
   const productMap = new Map(products.map((p) => [p.id, p]));
-
   const lineItems = [];
 
   for (const item of items) {
     const product = productMap.get(item.id);
     if (!product) {
-      return Response.json(
-        { error: `Produkt "${item.id}" nie istnieje.` },
-        { status: 400 }
-      );
+      return Response.json({ error: `Produkt "${item.id}" nie istnieje.` }, { status: 400 });
     }
-
     lineItems.push({
       price_data: {
         currency: 'pln',
-        unit_amount: Math.round(product.price * 100), // PLN → grosze (Stripe wymaga integer)
+        unit_amount: Math.round(product.price * 100),
         product_data: {
           name: product.name,
           ...(product.image && { images: [product.image.url] }),
@@ -71,11 +81,8 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  // --- Validate minimum order amount ---
   if (restaurantInfo.minimumOrderAmount != null) {
-    const total = lineItems.reduce((sum, li) => {
-      return sum + (li.price_data.unit_amount * li.quantity) / 100;
-    }, 0);
+    const total = lineItems.reduce((sum, li) => sum + (li.price_data.unit_amount * li.quantity) / 100, 0);
     if (total < restaurantInfo.minimumOrderAmount) {
       return Response.json(
         { error: `Minimalna kwota zamówienia to ${restaurantInfo.minimumOrderAmount.toFixed(2)} zł.` },
@@ -84,7 +91,6 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // --- Build notes metadata ---
   const metadata: Record<string, string> = {};
   items.forEach((item, index) => {
     if (item.note && item.note.trim()) {
@@ -94,24 +100,17 @@ export async function POST(request: NextRequest) {
     }
   });
 
-  // --- Stripe minimum amount check (49 PLN = 4900 groszy) ---
   const totalGrosze = lineItems.reduce((sum, li) => sum + li.price_data.unit_amount * li.quantity, 0);
   if (totalGrosze < 4900) {
-    return Response.json(
-      { error: 'Minimalna kwota zamówienia to 49,00 zł.' },
-      { status: 400 }
-    );
+    return Response.json({ error: 'Minimalna kwota zamówienia to 49,00 zł.' }, { status: 400 });
   }
 
-  // --- Create Stripe Checkout session ---
   const origin = request.headers.get('origin') ?? process.env.NEXT_PUBLIC_BASE_URL;
 
   try {
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items: lineItems,
-      // Brak payment_method_types = Stripe używa metod skonfigurowanych w Dashboard
-      // (BLIK, karty, Apple Pay, Google Pay — włącz w Stripe Dashboard > Settings)
       success_url: `${origin}/zamowienie/sukces?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${origin}/zamowienie/anulowano`,
       shipping_address_collection: { allowed_countries: ['PL'] },

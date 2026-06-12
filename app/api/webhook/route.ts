@@ -1,16 +1,32 @@
 import { NextRequest } from 'next/server';
 import Stripe from 'stripe';
 import { Resend } from 'resend';
-import { getEmailSettings, getRestaurantInfo } from '@/lib/datocms';
-import { supabase } from '@/lib/supabase';
+import { getEmailSettings, getRestaurantInfo } from '@/lib/queries';
+import { db } from '@/lib/db';
+import { orders, orderItems, settings } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
+
+// For now using a single tenant slug from env (dev mode).
+// In multi-tenant setup this would be resolved from the hostname.
+const DEFAULT_CLIENT_SLUG = process.env.DEFAULT_CLIENT_SLUG ?? 'default';
 
 function fillTemplate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? `{${key}}`);
 }
 
 export async function POST(request: NextRequest) {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+  // Resolve per-tenant Stripe keys (fall back to env vars for dev)
+  const tenantSettings = await db
+    .select()
+    .from(settings)
+    .where(eq(settings.clientSlug, DEFAULT_CLIENT_SLUG))
+    .limit(1)
+    .then(r => r[0] ?? null);
+
+  const stripeSecretKey = tenantSettings?.stripeSecretKey ?? process.env.STRIPE_SECRET_KEY!;
+  const webhookSecret = tenantSettings?.stripeWebhookSecret ?? process.env.STRIPE_WEBHOOK_SECRET!;
+
+  const stripe = new Stripe(stripeSecretKey);
   const sig = request.headers.get('stripe-signature');
   if (!sig) {
     return new Response('Brak podpisu Stripe.', { status: 400 });
@@ -35,7 +51,6 @@ export async function POST(request: NextRequest) {
       const amountTotal = ((session.amount_total ?? 0) / 100).toFixed(2);
       const stripeSessionId = session.id;
 
-      // Adres dostawy (Stripe v22: shipping_details przeniesione do collected_information)
       const addr = session.collected_information?.shipping_details?.address;
       const shippingAddress = addr
         ? [addr.line1, addr.line2, `${addr.postal_code ?? ''} ${addr.city ?? ''}`.trim(), addr.country]
@@ -43,24 +58,21 @@ export async function POST(request: NextRequest) {
             .join('\n')
         : 'brak';
 
-      // Krótki numer zamówienia oparty na czasie sesji, np. "260410-1423"
       const sessionDate = new Date((session.created ?? Date.now() / 1000) * 1000);
       const pad = (n: number) => n.toString().padStart(2, '0');
       const orderId = `${sessionDate.getFullYear().toString().slice(2)}${pad(sessionDate.getMonth() + 1)}${pad(sessionDate.getDate())}-${pad(sessionDate.getHours())}${pad(sessionDate.getMinutes())}${pad(sessionDate.getSeconds())}`;
 
-      // Zbierz uwagi z metadata sesji (format: uwaga_1 = "Produkt: treść")
       const notes = Object.entries(session.metadata ?? {})
         .filter(([k]) => k.startsWith('uwaga_'))
         .map(([, v]) => `• ${v}`)
         .join('\n');
 
-      // Pobierz pozycje zamówienia ze Stripe
       let itemsText = '';
+      let lineItemsData: Stripe.LineItem[] = [];
       try {
-        const lineItems = await stripe.checkout.sessions.listLineItems(stripeSessionId, { limit: 100 });
-        itemsText = lineItems.data
-          .map(li => `• ${li.description} × ${li.quantity}`)
-          .join('\n');
+        const result = await stripe.checkout.sessions.listLineItems(stripeSessionId, { limit: 100 });
+        lineItemsData = result.data;
+        itemsText = lineItemsData.map(li => `• ${li.description} × ${li.quantity}`).join('\n');
       } catch (err) {
         console.error('[webhook] Błąd pobierania line items:', err);
         itemsText = '(brak szczegółów)';
@@ -72,61 +84,58 @@ export async function POST(request: NextRequest) {
           `  Kwota: ${amountTotal} PLN`
       );
 
-      // Zapisz zamówienie do Supabase
+      // Save order to Neon via Drizzle
       try {
-        const { data: order, error: orderError } = await supabase
-          .from('orders')
-          .insert({
-            order_number: orderId,
-            stripe_session_id: stripeSessionId,
-            customer_name: customerName,
-            customer_email: customerEmail,
-            amount_total: parseFloat(amountTotal),
-            shipping_address: shippingAddress,
+        const inserted = await db
+          .insert(orders)
+          .values({
+            clientSlug: DEFAULT_CLIENT_SLUG,
+            orderNumber: orderId,
+            stripeSessionId,
+            customerName,
+            customerEmail,
+            amountTotal,
+            shippingAddress,
             notes: notes || null,
             status: 'completed',
           })
-          .select('id')
-          .single();
+          .returning({ id: orders.id });
 
-        if (orderError) {
-          console.error('[webhook] Błąd zapisu zamówienia do Supabase:', orderError);
-        } else {
-          // Pobierz line items ze Stripe i zapisz pozycje zamówienia
-          const lineItems = await stripe.checkout.sessions.listLineItems(stripeSessionId, { limit: 100 });
-          const items = lineItems.data.map(li => ({
-            order_id: order.id,
-            product_name: li.description ?? '',
-            quantity: li.quantity ?? 1,
-            unit_price: (li.amount_total ?? 0) / 100 / (li.quantity ?? 1),
-          }));
-          const { error: itemsError } = await supabase.from('order_items').insert(items);
-          if (itemsError) {
-            console.error('[webhook] Błąd zapisu pozycji zamówienia do Supabase:', itemsError);
-          } else {
-            console.log(`[webhook] Zamówienie #${orderId} zapisane do Supabase (${items.length} pozycji)`);
-          }
+        const orderId_ = inserted[0]?.id;
+        if (orderId_ && lineItemsData.length > 0) {
+          await db.insert(orderItems).values(
+            lineItemsData.map(li => ({
+              orderId: orderId_,
+              productName: li.description ?? '',
+              quantity: li.quantity ?? 1,
+              unitPrice: String((li.amount_total ?? 0) / 100 / (li.quantity ?? 1)),
+            }))
+          );
+          console.log(`[webhook] Zamówienie #${orderId} zapisane do Neon (${lineItemsData.length} pozycji)`);
         }
       } catch (err) {
-        console.error('[webhook] Nieoczekiwany błąd Supabase:', err);
+        console.error('[webhook] Błąd zapisu zamówienia do Neon:', err);
       }
 
-      // Wyślij maile tylko gdy klucz Resend jest skonfigurowany
-      if (!process.env.RESEND_API_KEY || !process.env.RESEND_FROM) {
+      // Send emails
+      const resendApiKey = tenantSettings?.resendApiKey ?? process.env.RESEND_API_KEY;
+      const resendFrom = tenantSettings?.resendFrom ?? process.env.RESEND_FROM;
+
+      if (!resendApiKey || !resendFrom) {
         console.warn('[webhook] Brak RESEND_API_KEY lub RESEND_FROM — pomijam wysyłkę maili.');
         break;
       }
 
-      const resend = new Resend(process.env.RESEND_API_KEY);
+      const resend = new Resend(resendApiKey);
 
       let emailSettings, restaurantInfo;
       try {
         [emailSettings, restaurantInfo] = await Promise.all([
-          getEmailSettings(),
-          getRestaurantInfo(),
+          getEmailSettings(DEFAULT_CLIENT_SLUG),
+          getRestaurantInfo(DEFAULT_CLIENT_SLUG),
         ]);
       } catch (err) {
-        console.error('[webhook] Błąd pobierania ustawień z DatoCMS:', err);
+        console.error('[webhook] Błąd pobierania ustawień:', err);
         break;
       }
 
@@ -140,31 +149,27 @@ export async function POST(request: NextRequest) {
         address: shippingAddress,
       };
 
-      // Mail do właściciela
       if (restaurantInfo.email) {
         try {
           await resend.emails.send({
-            from: process.env.RESEND_FROM,
+            from: resendFrom,
             to: restaurantInfo.email,
             subject: fillTemplate(emailSettings.ownerSubject, vars),
             text: fillTemplate(emailSettings.ownerBody, vars),
           });
-          console.log(`[webhook] Mail do właściciela wysłany → ${restaurantInfo.email}`);
         } catch (err) {
           console.error('[webhook] Błąd wysyłki maila do właściciela:', err);
         }
       }
 
-      // Mail do klienta
       if (customerEmail) {
         try {
           await resend.emails.send({
-            from: process.env.RESEND_FROM,
+            from: resendFrom,
             to: customerEmail,
             subject: fillTemplate(emailSettings.customerSubject, vars),
             text: fillTemplate(emailSettings.customerBody, vars),
           });
-          console.log(`[webhook] Mail do klienta wysłany → ${customerEmail}`);
         } catch (err) {
           console.error('[webhook] Błąd wysyłki maila do klienta:', err);
         }

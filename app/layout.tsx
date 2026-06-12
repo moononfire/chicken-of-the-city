@@ -6,8 +6,10 @@ import Footer from '@/components/Footer';
 import CartDrawer from '@/components/CartDrawer';
 import CartWidget from '@/components/CartWidget';
 import { CartProvider } from '@/context/CartContext';
-import { getRestaurantInfo, getSeoSettings, getBrandSettings } from '@/lib/datocms';
-import type { BrandSettings } from '@/lib/datocms';
+import { getRestaurantInfo, getSeoSettings, getBrandSettings } from '@/lib/queries';
+import type { BrandSettings } from '@/lib/queries';
+
+const DEFAULT_CLIENT_SLUG = process.env.DEFAULT_CLIENT_SLUG ?? 'default';
 
 const geist = Geist({ subsets: ['latin'] });
 
@@ -27,7 +29,7 @@ const BRAND_FALLBACK: BrandSettings = {
 
 export async function generateMetadata(): Promise<Metadata> {
   try {
-    const seo = await getSeoSettings();
+    const seo = await getSeoSettings(DEFAULT_CLIENT_SLUG);
     return {
       metadataBase: new URL(BASE_URL),
       title: {
@@ -72,8 +74,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const [info, brand] = await Promise.all([
-    getRestaurantInfo(),
-    getBrandSettings().catch(() => BRAND_FALLBACK),
+    getRestaurantInfo(DEFAULT_CLIENT_SLUG),
+    getBrandSettings(DEFAULT_CLIENT_SLUG).catch(() => BRAND_FALLBACK),
   ]);
 
   return (

@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
-import { getAllCategories, getAllProducts, getBrandSettings } from '@/lib/datocms';
+import { getAllCategories, getAllProducts, getBrandSettings } from '@/lib/queries';
+
+const DEFAULT_CLIENT_SLUG = process.env.DEFAULT_CLIENT_SLUG ?? 'default';
 import ProductCard from '@/components/ProductCard';
 
 export const revalidate = 60;
@@ -19,9 +21,9 @@ export const metadata: Metadata = {
 
 export default async function MenuPage() {
   const [categories, products, brand] = await Promise.all([
-    getAllCategories(),
-    getAllProducts(),
-    getBrandSettings(),
+    getAllCategories(DEFAULT_CLIENT_SLUG),
+    getAllProducts(DEFAULT_CLIENT_SLUG),
+    getBrandSettings(DEFAULT_CLIENT_SLUG),
   ]);
 
   const productsByCategory = categories.map((cat) => ({

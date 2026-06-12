@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { verifyToken } from '@/lib/auth';
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const token = request.cookies.get('admin_session')?.value;
-
-  if (token !== process.env.ADMIN_PASSWORD) {
+  if (!token) {
     return NextResponse.redirect(new URL('/admin', request.url));
   }
 
-  return NextResponse.next();
+  const payload = await verifyToken(token);
+  if (!payload) {
+    return NextResponse.redirect(new URL('/admin', request.url));
+  }
+
+  const response = NextResponse.next();
+  response.headers.set('x-client-slug', payload.clientSlug);
+  return response;
 }
 
 export const config = {

@@ -7,7 +7,7 @@ import CartDrawer from '@/components/CartDrawer';
 import CartWidget from '@/components/CartWidget';
 import { CartProvider } from '@/context/CartContext';
 import { getRestaurantInfo, getSeoSettings, getBrandSettings } from '@/lib/queries';
-import type { BrandSettings } from '@/lib/queries';
+import type { BrandSettings, RestaurantInfo } from '@/lib/queries';
 
 const DEFAULT_CLIENT_SLUG = process.env.DEFAULT_CLIENT_SLUG ?? 'default';
 
@@ -25,6 +25,14 @@ const BRAND_FALLBACK: BrandSettings = {
   categoryEmoji: '🍗',
   brandColor: '#f97316',
   secondaryColor: '#1d4ed8',
+};
+
+const INFO_FALLBACK: RestaurantInfo = {
+  phone: '',
+  address: '',
+  email: '',
+  openingHours: '',
+  minimumOrderAmount: null,
 };
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -74,7 +82,7 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const [info, brand] = await Promise.all([
-    getRestaurantInfo(DEFAULT_CLIENT_SLUG),
+    getRestaurantInfo(DEFAULT_CLIENT_SLUG).catch(() => INFO_FALLBACK),
     getBrandSettings(DEFAULT_CLIENT_SLUG).catch(() => BRAND_FALLBACK),
   ]);
 

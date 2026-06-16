@@ -22,7 +22,10 @@ export async function POST(request: NextRequest) {
     .limit(1)
     .then(r => r[0] ?? null);
 
-  const stripeSecretKey = tenantSettings?.stripeSecretKey ?? process.env.STRIPE_SECRET_KEY!;
+  const stripeSecretKey = tenantSettings?.stripeSecretKey ?? process.env.STRIPE_SECRET_KEY;
+  if (!stripeSecretKey) {
+    return Response.json({ error: 'Płatności online nie są jeszcze skonfigurowane.' }, { status: 503 });
+  }
   const stripe = new Stripe(stripeSecretKey);
 
   let items: CartItemInput[];

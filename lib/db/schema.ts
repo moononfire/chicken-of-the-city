@@ -6,7 +6,7 @@ export const clients = pgTable('clients', {
   id: uuid('id').defaultRandom().primaryKey(),
   slug: text('slug').unique().notNull(),
   businessName: text('business_name').notNull(),
-  email: text('email').notNull(),
+  email: text('email').unique().notNull(),
   status: clientStatusEnum('status').default('active').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });

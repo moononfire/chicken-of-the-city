@@ -23,6 +23,12 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: `Klient o slug "${slug}" już istnieje.` }, { status: 409 });
   }
 
+  // Email służy teraz do logowania, musi być unikalny
+  const existingEmail = await db.select().from(clients).where(eq(clients.email, email)).limit(1);
+  if (existingEmail[0]) {
+    return Response.json({ error: `Klient z adresem email "${email}" już istnieje.` }, { status: 409 });
+  }
+
   const passwordHash = await hashPassword(password);
 
   await db.insert(clients).values({ slug, businessName, email, status: 'active' });

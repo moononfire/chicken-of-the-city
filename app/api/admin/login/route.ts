@@ -5,17 +5,18 @@ import { eq } from 'drizzle-orm';
 import { verifyPassword, signToken } from '@/lib/auth';
 
 export async function POST(request: NextRequest) {
-  const { password, clientSlug } = await request.json();
+  const { email, password } = await request.json();
 
-  if (!password || !clientSlug) {
+  if (!email || !password) {
     return Response.json({ error: 'Brak danych logowania.' }, { status: 400 });
   }
 
-  // Find client
-  const clientRows = await db.select().from(clients).where(eq(clients.slug, clientSlug)).limit(1);
+  // Find client by email
+  const clientRows = await db.select().from(clients).where(eq(clients.email, email)).limit(1);
   if (!clientRows[0]) {
     return Response.json({ error: 'Nieprawidłowe dane logowania.' }, { status: 401 });
   }
+  const clientSlug = clientRows[0].slug;
 
   // Find auth record
   const authRows = await db.select().from(clientAuth).where(eq(clientAuth.clientSlug, clientSlug)).limit(1);

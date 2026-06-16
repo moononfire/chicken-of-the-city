@@ -3,11 +3,9 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-const DEFAULT_CLIENT_SLUG = process.env.NEXT_PUBLIC_DEFAULT_CLIENT_SLUG ?? 'default';
-
 export default function AdminLoginPage() {
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [clientSlug, setClientSlug] = useState(DEFAULT_CLIENT_SLUG);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
@@ -20,7 +18,7 @@ export default function AdminLoginPage() {
     const res = await fetch('/api/admin/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password, clientSlug }),
+      body: JSON.stringify({ email, password }),
     });
 
     if (res.ok) {
@@ -39,19 +37,16 @@ export default function AdminLoginPage() {
         <p className="mb-8 text-center text-sm text-zinc-400">Zaloguj się aby zobaczyć statystyki</p>
 
         <form onSubmit={handleSubmit} className="rounded-2xl bg-zinc-900 p-8 shadow-xl">
-          {DEFAULT_CLIENT_SLUG === 'default' && (
-            <>
-              <label className="mb-1 block text-sm font-medium text-zinc-300">Slug restauracji</label>
-              <input
-                type="text"
-                value={clientSlug}
-                onChange={e => setClientSlug(e.target.value)}
-                className="mb-4 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-white placeholder-zinc-500 focus:border-orange-500 focus:outline-none"
-                placeholder="np. restauracja-anna"
-                required
-              />
-            </>
-          )}
+          <label className="mb-1 block text-sm font-medium text-zinc-300">Email</label>
+          <input
+            type="email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            className="mb-4 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-white placeholder-zinc-500 focus:border-orange-500 focus:outline-none"
+            placeholder="np. jan@restauracja.pl"
+            required
+            autoFocus
+          />
 
           <label className="mb-1 block text-sm font-medium text-zinc-300">Hasło</label>
           <input
@@ -61,7 +56,6 @@ export default function AdminLoginPage() {
             className="mb-4 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-white placeholder-zinc-500 focus:border-orange-500 focus:outline-none"
             placeholder="••••••••"
             required
-            autoFocus
           />
 
           {error && <p className="mb-4 text-sm text-red-400">{error}</p>}
